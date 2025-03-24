@@ -91,7 +91,7 @@ def main():
                     raise ValueError("No output from model")
             
                 items += response["output"]
-                print("*******", response["output"])
+                # print(response["output"])
 
                 if turn <= 1:
                     for item in response["output"]:
@@ -128,7 +128,7 @@ def main():
                         if "output" not in correction_response:
                             print(correction_response)
                             raise ValueError("No output from model")
-                        print(correction_response["output"])
+                        # print(correction_response["output"])
 
                         critique_items = critique_items + correction_response["output"]
                         
