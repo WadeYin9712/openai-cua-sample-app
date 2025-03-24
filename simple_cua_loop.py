@@ -10,7 +10,7 @@ def acknowledge_safety_check_callback(message: str) -> bool:
     return response.strip() == "y"
 
 
-def handle_item(item, computer: Computer):
+def handle_item(item, computer: Computer, call_id: str = None) -> list:
     """Handle each item; may cause a computer action + screenshot."""
     if item["type"] == "message":  # print messages
         print(item["content"][0]["text"])
@@ -19,7 +19,6 @@ def handle_item(item, computer: Computer):
         action = item["action"]
         action_type = action["type"]
         action_args = {k: v for k, v in action.items() if k != "type"}
-        print(f"{action_type}({action_args})")
 
         # give our computer environment action to perform
         getattr(computer, action_type)(**action_args)
@@ -34,7 +33,7 @@ def handle_item(item, computer: Computer):
         # return value informs model of the latest screenshot
         call_output = {
             "type": "computer_call_output",
-            "call_id": item["call_id"],
+            "call_id": item["call_id"] if call_id is None else call_id,
             "acknowledged_safety_checks": pending_checks,
             "output": {
                 "type": "input_image",
@@ -65,27 +64,90 @@ def main():
             }
         ]
 
+        computer.goto("https://copilot.microsoft.com")
+
         items = []
         while True:  # get user input forever
             user_input = input("> ")
             items.append({"role": "user", "content": user_input})
 
+            turn = 0
             while True:  # keep looping until we get a final response
                 response = create_response(
                     model="computer-use-preview",
                     input=items,
                     tools=tools,
+                    reasoning={
+                        "generate_summary": "concise",
+                    },
                     truncation="auto",
                 )
+
+                # Introduce the latest arxiv paper in the Computation and Language section
+                # You should click Videos in the header
 
                 if "output" not in response:
                     print(response)
                     raise ValueError("No output from model")
-
+            
                 items += response["output"]
+                print("*******", response["output"])
 
-                for item in response["output"]:
-                    items += handle_item(item, computer)
+                if turn <= 1:
+                    for item in response["output"]:
+                        items += handle_item(item, computer)
+                else:
+                    critique = input("Critique > ")
+                    critique_items = [
+                        {
+                            "role": "user", 
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": critique
+                                },
+                                {
+                                    "type": "input_image",
+                                    "image_url": f"data:image/png;base64,{computer.screenshot()}"
+                                }
+                            ]
+                        }
+                    ]
+
+                    while True:       # Once we have a critique, we want to modify the model behavior
+                        correction_response = create_response(
+                            model="computer-use-preview",
+                            input=critique_items,
+                            tools=tools,
+                            reasoning={
+                                "generate_summary": "concise",
+                            },
+                            truncation="auto",
+                        )
+
+                        if "output" not in correction_response:
+                            print(correction_response)
+                            raise ValueError("No output from model")
+                        print(correction_response["output"])
+
+                        critique_items = critique_items + correction_response["output"]
+                        
+                        if critique_items[-1].get("role") == "assistant":   # Sometimes Operator will have a followup question, then automatically response with "yes"
+                            critique_items.append({"role": "user", "content": "Yes!"})
+                        else:
+                            last_item = correction_response["output"][-1]
+                            items[-1]["action"] = last_item["action"]   # replace the last action with the one that should be done according to the critique
+                            
+                            reverse_index = -1
+                            while "call_id" not in items[reverse_index]:
+                                reverse_index -= 1
+
+                            if reverse_index < -1:
+                                items = items[:reverse_index + 1]
+                            items += handle_item(last_item, computer, call_id=items[-1]["call_id"])
+                            break
+
+                turn += 1
 
                 if items[-1].get("role") == "assistant":
                     break
